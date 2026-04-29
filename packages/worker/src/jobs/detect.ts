@@ -1,12 +1,15 @@
+import { createHash } from "node:crypto";
 import { load } from "cheerio";
 import { supabaseService, logEvent } from "@ghl-vc/shared";
 
 const CHANGELOG_URL = "https://ideas.gohighlevel.com/changelog";
 
 /**
- * Poll the GHL changelog and insert any entries we haven't seen before.
- * Each entry on ideas.gohighlevel.com has a stable slug we use as `source_id`,
- * so the unique (account_id, source, source_id) constraint dedupes for free.
+ * Poll the GHL changelog and:
+ *   - Insert any unseen entries (new features)
+ *   - For known entries whose content has changed, queue a versioned regeneration
+ *     (a new feature row with parent_feature_id pointing at the original)
+ *   - Respect skip_rules (regex patterns matched against title)
  */
 export async function detectFeatures(): Promise<void> {
   const sb = supabaseService();
@@ -16,56 +19,128 @@ export async function detectFeatures(): Promise<void> {
     return;
   }
 
+  // Load skip rules once
+  const { data: skipRulesRaw } = await sb
+    .from("skip_rules")
+    .select("pattern,reason")
+    .eq("account_id", account.id);
+  const skipRules = (skipRulesRaw ?? []).map((r) => ({
+    re: safeRegex(r.pattern),
+    reason: r.reason,
+  }));
+
   const res = await fetch(CHANGELOG_URL, {
     headers: {
       "User-Agent":
-        "Mozilla/5.0 (compatible; GHLVideoCreator/0.1; +https://github.com/automaticdesigns/ghl-video-creator)",
+        "Mozilla/5.0 (compatible; GHLVideoCreator/0.2; +https://github.com/automaticdesigns/ghl-video-creator)",
     },
   });
   if (!res.ok) throw new Error(`changelog fetch ${res.status}`);
   const html = await res.text();
   const $ = load(html);
 
-  // Each changelog post is a /changelog/<slug> link — selector may need to adapt as the
-  // marketing site changes. We grab unique slugs and titles defensively.
-  const seen = new Set<string>();
-  const entries: { slug: string; title: string; url: string }[] = [];
+  // Build a map slug -> { title, url, summaryHtml }
+  const seen = new Map<string, { slug: string; title: string; url: string; html: string }>();
   $("a[href*='/changelog/']").each((_i, el) => {
     const href = $(el).attr("href") ?? "";
     const m = href.match(/\/changelog\/([a-z0-9-]+)/i);
     if (!m) return;
     const slug = m[1];
     if (seen.has(slug)) return;
-    seen.add(slug);
     const title = $(el).text().trim() || slug.replace(/-/g, " ");
     const url = href.startsWith("http") ? href : `https://ideas.gohighlevel.com${href}`;
-    entries.push({ slug, title, url });
+    // Pull a small chunk of nearby HTML so the content hash is stable + sensitive to edits
+    const block = $(el).closest("article, li, section").html() ?? $(el).parent().html() ?? title;
+    seen.set(slug, { slug, title, url, html: String(block).slice(0, 8000) });
   });
 
-  if (entries.length === 0) {
+  if (seen.size === 0) {
     console.warn("[detect] 0 entries parsed — check selector");
     return;
   }
 
   let inserted = 0;
-  for (const e of entries) {
-    const { error } = await sb.from("features").insert({
-      account_id: account.id,
-      source: "changelog",
-      source_id: e.slug,
-      title: e.title,
-      url: e.url,
-      raw_html: null,
-      status: "new",
-    });
-    if (!error) inserted++;
-    else if (!/duplicate key/i.test(error.message ?? "")) {
-      console.warn("[detect] insert error:", error.message);
+  let regenQueued = 0;
+  let skipped = 0;
+
+  for (const entry of seen.values()) {
+    if (skipRules.some(({ re }) => re && re.test(entry.title))) {
+      skipped++;
+      continue;
+    }
+    const contentHash = sha1(entry.html);
+
+    // Look up an existing record by source_id
+    const { data: existing } = await sb
+      .from("features")
+      .select("id,version,content_hash,status")
+      .eq("account_id", account.id)
+      .eq("source", "changelog")
+      .eq("source_id", entry.slug)
+      .order("version", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!existing) {
+      const { error } = await sb.from("features").insert({
+        account_id: account.id,
+        source: "changelog",
+        source_id: entry.slug,
+        title: entry.title,
+        url: entry.url,
+        raw_html: entry.html,
+        status: "new",
+        content_hash: contentHash,
+        version: 1,
+      });
+      if (!error) inserted++;
+      else if (!/duplicate key/i.test(error.message ?? "")) {
+        console.warn("[detect] insert error:", error.message);
+      }
+      continue;
+    }
+
+    // Known feature — has the content meaningfully changed?
+    if (existing.content_hash !== contentHash && existing.status === "ready") {
+      // Mark old as superseded; insert v(N+1) as a new pending feature row that
+      // pipeline will pick up. Source_id is reused but we change the source_id key
+      // by appending the version to avoid the unique constraint collision.
+      const newVersion = (existing.version ?? 1) + 1;
+      const newSourceId = `${entry.slug}@v${newVersion}`;
+      await sb.from("features").update({ status: "superseded" }).eq("id", existing.id);
+      const { error } = await sb.from("features").insert({
+        account_id: account.id,
+        source: "changelog",
+        source_id: newSourceId,
+        title: entry.title,
+        url: entry.url,
+        raw_html: entry.html,
+        status: "new",
+        content_hash: contentHash,
+        version: newVersion,
+        parent_feature_id: existing.id,
+      });
+      if (!error) regenQueued++;
     }
   }
 
-  if (inserted > 0) {
-    await logEvent({ kind: "detected", payload: { count: inserted } });
-    console.log(`[detect] +${inserted} new features`);
+  if (inserted + regenQueued + skipped > 0) {
+    await logEvent({
+      kind: "detected",
+      payload: { inserted, regenQueued, skipped },
+    });
+    console.log(`[detect] +${inserted} new, +${regenQueued} regen, ${skipped} skipped`);
+  }
+}
+
+function sha1(input: string): string {
+  return createHash("sha1").update(input).digest("hex");
+}
+
+function safeRegex(pattern: string): RegExp | null {
+  try {
+    return new RegExp(pattern, "i");
+  } catch {
+    return null;
   }
 }

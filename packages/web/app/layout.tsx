@@ -11,6 +11,8 @@ const NAV = [
   { href: "/", label: "Dashboard" },
   { href: "/features", label: "Features" },
   { href: "/videos", label: "Videos" },
+  { href: "/cost", label: "Cost" },
+  { href: "/skip-rules", label: "Skip rules" },
   { href: "/settings", label: "Settings" },
 ];
 

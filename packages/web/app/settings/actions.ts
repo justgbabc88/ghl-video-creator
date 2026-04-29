@@ -13,6 +13,9 @@ export async function saveSettings(formData: FormData) {
   const email = String(formData.get("email") ?? "").trim();
   if (!email) return;
 
+  const voicePresets = parseVoicePresets(String(formData.get("voice_presets") ?? ""));
+  const notificationEvents = formData.getAll("notif_event").map((v) => String(v));
+
   const payload = {
     email,
     affiliate_link: stringOrNull(formData.get("affiliate_link")),
@@ -22,6 +25,12 @@ export async function saveSettings(formData: FormData) {
     default_voice_id:
       stringOrNull(formData.get("default_voice_id")) ?? "21m00Tcm4TlvDq8ikWAM",
     review_required: formData.get("review_required") === "on",
+    voice_presets: voicePresets,
+    notification_settings: {
+      slack: formData.get("notif_slack") === "on",
+      email: formData.get("notif_email") === "on",
+      events: notificationEvents,
+    },
   };
 
   const { data: existing } = await sb
@@ -37,6 +46,22 @@ export async function saveSettings(formData: FormData) {
     await sb.from("accounts").insert(payload);
   }
   revalidatePath("/settings");
+}
+
+function parseVoicePresets(raw: string): unknown[] {
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        const obj = JSON.parse(line);
+        if (obj && typeof obj === "object" && obj.voice_id) return [obj];
+      } catch {
+        // skip malformed lines silently — UI can be improved to surface this
+      }
+      return [];
+    });
 }
 
 function stringOrNull(v: FormDataEntryValue | null): string | null {

@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { serverClient } from "@/lib/supabase";
-import { ApproveForm, RejectForm } from "./actions-client";
+import { ApproveForm, RejectForm, MetadataEditor } from "./actions-client";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +9,7 @@ export default async function VideoDetail({ params }: { params: { id: string } }
   const { data: video } = await sb
     .from("videos")
     .select(
-      "id,status,recording_url,narration_url,final_url,thumbnail_url,youtube_url,duration_seconds,cost_breakdown,error,created_at,published_at,feature_id,script_id,features!inner(title,url,summary,use_cases),scripts(body,sections,llm_model,cost_usd)",
+      "id,status,recording_url,narration_url,final_url,shorts_url,shorts_youtube_url,thumbnail_url,captions_url,youtube_url,duration_seconds,cost_breakdown,error,created_at,published_at,feature_id,script_id,features!inner(title,url,summary,use_cases),scripts(body,sections,llm_model,cost_usd)",
     )
     .eq("id", params.id)
     .maybeSingle();
@@ -54,28 +54,66 @@ export default async function VideoDetail({ params }: { params: { id: string } }
         )}
       </Section>
 
+      {video.shorts_url ? (
+        <Section title="Shorts cut (9:16)">
+          <video
+            src={video.shorts_url}
+            controls
+            className="w-72 rounded-md border"
+            style={{ aspectRatio: "9 / 16" }}
+          />
+          {video.shorts_youtube_url ? (
+            <p className="text-xs mt-2">
+              <a
+                href={video.shorts_youtube_url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-blue-600 hover:underline"
+              >
+                Live on YouTube Shorts &rarr;
+              </a>
+            </p>
+          ) : null}
+        </Section>
+      ) : null}
+
       <Section title="YouTube metadata">
-        {pub ? (
-          <div className="space-y-2 text-sm">
-            <Field label="Title" value={pub.title} />
-            <Field label="Description" value={pub.description} multiline />
-            <Field label="Tags" value={(pub.tags ?? []).join(", ")} />
-            <Field label="Privacy" value={pub.privacy_status} />
-          </div>
-        ) : (
-          <p className="text-sm text-slate-500">Metadata not generated yet.</p>
-        )}
+        <MetadataEditor
+          videoId={video.id}
+          editable={video.status === "review"}
+          initial={{
+            title: pub?.title ?? "",
+            description: pub?.description ?? "",
+            tags: (pub?.tags ?? []).join(", "),
+            privacy_status: (pub?.privacy_status as any) ?? "public",
+            scheduled_for: pub?.scheduled_for ?? "",
+          }}
+        />
       </Section>
 
       {video.status === "review" ? (
         <Section title="Review">
           <p className="text-sm text-slate-600 mb-3">
-            Approve to publish to YouTube. Reject to skip this feature permanently.
+            Save your edits first, then approve to publish to YouTube. Reject to skip this
+            feature permanently.
           </p>
           <div className="flex gap-3">
             <ApproveForm videoId={video.id} />
             <RejectForm videoId={video.id} />
           </div>
+        </Section>
+      ) : null}
+
+      {video.youtube_url ? (
+        <Section title="Live on YouTube">
+          <a
+            href={video.youtube_url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-blue-600 hover:underline"
+          >
+            {video.youtube_url}
+          </a>
         </Section>
       ) : null}
 
@@ -100,26 +138,5 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h2 className="font-semibold mb-3">{title}</h2>
       {children}
     </section>
-  );
-}
-
-function Field({
-  label,
-  value,
-  multiline,
-}: {
-  label: string;
-  value: string | null | undefined;
-  multiline?: boolean;
-}) {
-  return (
-    <div>
-      <div className="text-xs uppercase tracking-wide text-slate-500">{label}</div>
-      {multiline ? (
-        <pre className="whitespace-pre-wrap mt-1">{value ?? "—"}</pre>
-      ) : (
-        <div className="mt-1">{value ?? "—"}</div>
-      )}
-    </div>
   );
 }
