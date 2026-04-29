@@ -1,0 +1,19 @@
+{
+  "name": "ghl-video-creator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Auto-detect GHL feature releases, record a walkthrough with AI voiceover, and publish to YouTube.",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @ghl-vc/web",
+    "dev:worker": "npm run dev --workspace @ghl-vc/worker",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

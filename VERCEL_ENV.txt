@@ -1,0 +1,9 @@
+# Paste these into Vercel → Project → Settings → Environment Variables (Production + Preview)
+
+SUPABASE_URL=https://cddutihucarzapbibdii.supabase.co
+SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNkZHV0aWh1Y2FyemFwYmliZGlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc0MzA2NTQsImV4cCI6MjA5MzAwNjY1NH0.ouE-nkn77zFjSlMh3ltjXEfDkrYrLDG5KlKhH_tQaeo
+SUPABASE_SERVICE_ROLE_KEY=__PASTE_FROM_SUPABASE_DASHBOARD__
+
+YOUTUBE_CLIENT_ID=__FROM_GOOGLE_CLOUD__
+YOUTUBE_CLIENT_SECRET=__FROM_GOOGLE_CLOUD__
+YOUTUBE_REDIRECT_URI=https://__YOUR_VERCEL_DOMAIN__/api/youtube/oauth/callback
