@@ -13,6 +13,8 @@ export async function GET() {
     access_type: "offline",
     prompt: "consent", // force a refresh_token on every consent
     scope: [
+      "openid",
+      "email",
       "https://www.googleapis.com/auth/youtube.upload",
       "https://www.googleapis.com/auth/youtube.readonly",
       "https://www.googleapis.com/auth/yt-analytics.readonly",

@@ -20,12 +20,21 @@ export async function GET(req: NextRequest) {
   }
 
   oauth2.setCredentials(tokens);
+
+  // Pull channel id and the Google account email in parallel
   const yt = google.youtube({ version: "v3", auth: oauth2 });
-  const channels = await yt.channels.list({ part: ["id", "snippet"], mine: true });
-  const channelId = channels.data.items?.[0]?.id ?? null;
+  const userinfo = google.oauth2({ version: "v2", auth: oauth2 });
+
+  const [channelsRes, userInfoRes] = await Promise.all([
+    yt.channels.list({ part: ["id", "snippet"], mine: true }),
+    userinfo.userinfo.get().catch(() => null), // tolerate missing email scope
+  ]);
+
+  const channelId = channelsRes.data.items?.[0]?.id ?? null;
+  const googleEmail = userInfoRes?.data?.email ?? null;
 
   const sb = serverClient();
-  const { data: existing } = await sb.from("accounts").select("id").limit(1).maybeSingle();
+  const { data: existing } = await sb.from("accounts").select("id,email").limit(1).maybeSingle();
 
   const update = {
     youtube_refresh_token: tokens.refresh_token,
@@ -33,10 +42,17 @@ export async function GET(req: NextRequest) {
   };
 
   if (existing) {
-    await sb.from("accounts").update(update).eq("id", existing.id);
+    // Upgrade a placeholder email if one is still in place; otherwise leave the user's chosen email alone
+    const shouldOverwriteEmail =
+      googleEmail && (!existing.email || existing.email === "owner@local");
+    await sb
+      .from("accounts")
+      .update(shouldOverwriteEmail ? { ...update, email: googleEmail } : update)
+      .eq("id", existing.id);
   } else {
+    // First connect: prefer the Google email, fall back to a placeholder only if Google didn't return one
     await sb.from("accounts").insert({
-      email: "owner@local",
+      email: googleEmail ?? "owner@local",
       ...update,
     });
   }
