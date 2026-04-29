@@ -68,10 +68,14 @@ async function recordImpl(
 
   try {
     browser = await chromium.launch({ headless: true });
+    const proxy = parseProxyUrl(process.env.RESIDENTIAL_PROXY_URL);
+    if (proxy) console.log("[record] routing Playwright via residential proxy", proxy.server);
+
     context = await browser.newContext({
       viewport: { width: 1920, height: 1080 },
       recordVideo: { dir: tmpDir, size: { width: 1920, height: 1080 } },
       storageState: haveSession ? (account.ghl_session_cookies as any) : undefined,
+      proxy: proxy ?? undefined,
     });
 
     const page = await context.newPage();
@@ -276,6 +280,30 @@ async function scrollSlowly(page: Page, total: number) {
   for (let y = 0; y < total; y += 200) {
     await page.mouse.wheel(0, 200);
     await page.waitForTimeout(350);
+  }
+}
+
+/**
+ * Parse a `http://user:pass@host:port` proxy URL into Playwright's proxy config shape.
+ * Returns null if the env var is unset or unparseable so the recorder falls back to
+ * the unproxied path.
+ */
+function parseProxyUrl(raw: string | undefined): {
+  server: string;
+  username?: string;
+  password?: string;
+} | null {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    return {
+      server: `${u.protocol}//${u.host}`,
+      username: u.username ? decodeURIComponent(u.username) : undefined,
+      password: u.password ? decodeURIComponent(u.password) : undefined,
+    };
+  } catch (err) {
+    console.warn("[record] failed to parse RESIDENTIAL_PROXY_URL — recording unproxied");
+    return null;
   }
 }
 
