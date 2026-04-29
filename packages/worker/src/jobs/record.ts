@@ -83,26 +83,53 @@ async function recordImpl(
       await scrollSlowly(page, 2200);
     }
 
-    // 2) Live demo. If we don't have a session, this won't get past the login wall —
-    // but the recording still has the changelog reading, which is useful.
+    // 2) Live demo. If cookies are present, try the GHL app. If GHL bounces us to
+    //    login (datacenter IP fingerprinting, expired session, etc.), fall back to
+    //    a changelog-only walk-through rather than burning compute on the login page.
+    let usingLiveDemo = false;
     if (haveSession) {
       try {
-        await page.goto("https://app.gohighlevel.com/", { waitUntil: "domcontentloaded" });
+        await page.goto("https://app.gohighlevel.com/", {
+          waitUntil: "domcontentloaded",
+          timeout: 15_000,
+        });
         await page.waitForTimeout(2500);
-      } catch {
-        /* network hiccup — continue */
+        usingLiveDemo = await isLoggedIntoGHL(page);
+        if (!usingLiveDemo) {
+          console.warn("[record] GHL session rejected (likely IP fingerprint). Falling back.");
+        }
+      } catch (err) {
+        console.warn("[record] GHL navigation failed, falling back:", err);
       }
+    }
 
-      // 3) For each section, ask Claude to plan recorder actions, then execute them.
+    if (usingLiveDemo) {
+      // 3a) For each section, ask Claude to plan recorder actions, then execute them.
       for (let i = 0; i < sections.length; i++) {
         const section = sections[i];
         const targetMs = clampSectionMs(section);
         await runOneSection(page, section, featureTitle ?? "", videoId, targetMs);
       }
     } else {
-      // No session — pad the recording to roughly the script length so audio mux works.
+      // 3b) No live demo — go back to the changelog page (which we already showed earlier)
+      //     and run a section-aware walk so the lower-thirds and pacing still align.
+      if (featureUrl) {
+        try {
+          await page.goto(featureUrl, { waitUntil: "domcontentloaded", timeout: 12_000 });
+          await page.waitForTimeout(1500);
+        } catch {
+          /* swallow */
+        }
+      }
       for (const s of sections) {
-        await page.waitForTimeout(clampSectionMs(s));
+        const ms = clampSectionMs(s);
+        // Slow scroll throughout the section so the video isn't a static frame
+        const ticks = Math.max(4, Math.floor(ms / 1500));
+        const stepMs = Math.floor(ms / ticks);
+        for (let t = 0; t < ticks; t++) {
+          await page.mouse.wheel(0, 180);
+          await page.waitForTimeout(stepMs);
+        }
       }
     }
 
@@ -249,5 +276,31 @@ async function scrollSlowly(page: Page, total: number) {
   for (let y = 0; y < total; y += 200) {
     await page.mouse.wheel(0, 200);
     await page.waitForTimeout(350);
+  }
+}
+
+/**
+ * Decide whether the GHL session cookies actually got us logged in. If GHL/Cloudflare
+ * rejected the cookies, we're probably sitting on the login page — bail to fallback.
+ *
+ * Heuristics:
+ *   1. URL ends up on a /login/ or /auth/ path
+ *   2. URL is no longer on app.gohighlevel.com (some flows redirect to leadconnectorhq)
+ *   3. Page has a visible password input (always means we're at a login wall)
+ */
+async function isLoggedIntoGHL(page: Page): Promise<boolean> {
+  try {
+    const url = page.url();
+    if (!/app\.gohighlevel\.com|app\.leadconnectorhq\.com/i.test(url)) return false;
+    if (/\/(login|signin|auth|verify|2fa|otp)/i.test(url)) return false;
+    const hasPasswordField = await page
+      .locator('input[type="password"]')
+      .first()
+      .isVisible({ timeout: 1500 })
+      .catch(() => false);
+    if (hasPasswordField) return false;
+    return true;
+  } catch {
+    return false;
   }
 }
