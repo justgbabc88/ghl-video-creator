@@ -3,6 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { serverClient } from "@/lib/supabase";
 
+/**
+ * Single-account MVP: there is at most one row in `accounts`. We always look
+ * it up by id (oldest first) and update it, so changing the email doesn't
+ * accidentally create a second row whose values the worker won't see.
+ */
 export async function saveSettings(formData: FormData) {
   const sb = serverClient();
   const email = String(formData.get("email") ?? "").trim();
@@ -19,7 +24,13 @@ export async function saveSettings(formData: FormData) {
     review_required: formData.get("review_required") === "on",
   };
 
-  const { data: existing } = await sb.from("accounts").select("id").eq("email", email).maybeSingle();
+  const { data: existing } = await sb
+    .from("accounts")
+    .select("id")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
   if (existing) {
     await sb.from("accounts").update(payload).eq("id", existing.id);
   } else {
