@@ -1,5 +1,7 @@
 # Playwright base ships with Chromium and all OS deps preinstalled.
-FROM mcr.microsoft.com/playwright:v1.47.0-jammy
+# IMPORTANT: keep this version in lockstep with the `playwright` dep version in
+# packages/worker/package.json — mismatch breaks the browser launch.
+FROM mcr.microsoft.com/playwright:v1.59.1-jammy
 
 # Install ffmpeg for video assembly
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
