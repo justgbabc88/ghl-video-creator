@@ -326,26 +326,52 @@ function parseProxyUrl(raw: string | undefined): {
 }
 
 /**
- * Decide whether the GHL session cookies actually got us logged in. If GHL/Cloudflare
- * rejected the cookies, we're probably sitting on the login page — bail to fallback.
+ * Decide whether the GHL session cookies actually got us logged in. The previous
+ * snapshot-style check fired too early — GHL's login page hadn't rendered yet, so
+ * we couldn't distinguish "still loading" from "actually in the app". This version:
  *
- * Heuristics:
- *   1. URL ends up on a /login/ or /auth/ path
- *   2. URL is no longer on app.gohighlevel.com (some flows redirect to leadconnectorhq)
- *   3. Page has a visible password input (always means we're at a login wall)
+ *   1. Waits for network to go idle so the page is truly done loading.
+ *   2. Races two signals: a visible password field (logged out) vs an app-shell
+ *      element like a sidebar/navigation (logged in). Whichever appears first wins.
+ *   3. Falls back to URL pattern check.
  */
 async function isLoggedIntoGHL(page: Page): Promise<boolean> {
   try {
+    // Let GHL settle. Up to 12s for networkidle; if it doesn't reach idle, we still
+    // press on with the explicit-element race below.
+    await page.waitForLoadState("networkidle", { timeout: 12_000 }).catch(() => {});
+
+    const result = await Promise.race<"login" | "app" | "timeout">([
+      page
+        .waitForSelector('input[type="password"]', { state: "visible", timeout: 8_000 })
+        .then(() => "login" as const)
+        .catch(() => "timeout" as const),
+      page
+        .waitForSelector(
+          // App-shell selectors that exist after login but never on the login screen.
+          [
+            '[data-testid*="sidebar"]',
+            '[data-test-id*="sidebar"]',
+            'aside[role="navigation"]',
+            'nav[aria-label*="ain"]',           // matches "Main", "Main navigation"
+            '[class*="sub-account"]',
+            '[class*="location-switcher"]',
+          ].join(", "),
+          { state: "visible", timeout: 8_000 },
+        )
+        .then(() => "app" as const)
+        .catch(() => "timeout" as const),
+    ]);
+
+    if (result === "login") return false;
+    if (result === "app") return true;
+
+    // Neither signal appeared in 8s. Use URL as a last resort.
     const url = page.url();
-    if (!/app\.gohighlevel\.com|app\.leadconnectorhq\.com/i.test(url)) return false;
     if (/\/(login|signin|auth|verify|2fa|otp)/i.test(url)) return false;
-    const hasPasswordField = await page
-      .locator('input[type="password"]')
-      .first()
-      .isVisible({ timeout: 1500 })
-      .catch(() => false);
-    if (hasPasswordField) return false;
-    return true;
+    if (!/app\.gohighlevel\.com|app\.leadconnectorhq\.com/i.test(url)) return false;
+    // URL looks logged-in but no app shell rendered — treat as not-logged-in to be safe.
+    return false;
   } catch {
     return false;
   }
