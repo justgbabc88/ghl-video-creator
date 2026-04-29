@@ -22,8 +22,10 @@ import { runRecorderActions } from "../lib/recorder.js";
  *     the section's `ghl_actions` and the live DOM. Run those actions on the page
  *     while Playwright records video.
  *
- * Wrapped in a hard 8-minute timeout so a stuck Playwright session can't hang the
- * whole pipeline indefinitely.
+ * Wrapped in a hard 15-minute timeout so a stuck Playwright session can't hang the
+ * whole pipeline indefinitely. A typical 5-section silent walkthrough sums to ~7-8 min
+ * of pacing alone — 15 min gives comfortable headroom for slow page loads + tool-use
+ * planning calls.
  */
 export async function recordWalkthrough(
   videoId: string,
@@ -34,8 +36,8 @@ export async function recordWalkthrough(
     recordImpl(videoId, scriptId, account),
     new Promise<string>((_resolve, reject) =>
       setTimeout(
-        () => reject(new Error("recordWalkthrough timed out after 8 minutes")),
-        8 * 60 * 1000,
+        () => reject(new Error("recordWalkthrough timed out after 15 minutes")),
+        15 * 60 * 1000,
       ),
     ),
   ]);
