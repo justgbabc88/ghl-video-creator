@@ -1,4 +1,5 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { anonymizeProxy, closeAnonymizedProxy } from "proxy-chain";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs/promises";
@@ -65,17 +66,24 @@ async function recordImpl(
 
   let browser: Browser | null = null;
   let context: BrowserContext | null = null;
+  let anonymizedProxyUrl: string | null = null; // local URL we'll close at the end
 
   try {
-    const proxy = parseProxyUrl(process.env.RESIDENTIAL_PROXY_URL);
-    if (proxy) console.log("[record] routing Playwright via residential proxy", proxy.server);
+    // Headless Chromium can't negotiate HTTP 407 auth challenges reliably even with
+    // username/password set on the launch options, so we launder the upstream
+    // authenticated proxy through proxy-chain. proxy-chain spins up a local HTTP
+    // proxy on a random port that handles the auth on behalf of Chromium and forwards
+    // requests upstream. Chromium then talks to localhost:<port> with no auth, no 407,
+    // no fuss.
+    const upstream = process.env.RESIDENTIAL_PROXY_URL;
+    if (upstream) {
+      anonymizedProxyUrl = await anonymizeProxy(upstream);
+      console.log("[record] residential proxy laundered through", anonymizedProxyUrl);
+    }
 
-    // Proxy must be set at launch level for authenticated proxies — Chromium
-    // throws ERR_PROXY_AUTH_UNSUPPORTED when proxy auth is supplied via newContext
-    // but the CONNECT challenge comes back before the context overrides apply.
     browser = await chromium.launch({
       headless: true,
-      proxy: proxy ?? undefined,
+      proxy: anonymizedProxyUrl ? { server: anonymizedProxyUrl } : undefined,
     });
 
     context = await browser.newContext({
@@ -145,9 +153,13 @@ async function recordImpl(
 
     await context.close();
     await browser.close();
+    if (anonymizedProxyUrl)
+      await closeAnonymizedProxy(anonymizedProxyUrl, true).catch(() => {});
   } catch (err) {
     if (context) await context.close().catch(() => {});
     if (browser) await browser.close().catch(() => {});
+    if (anonymizedProxyUrl)
+      await closeAnonymizedProxy(anonymizedProxyUrl, true).catch(() => {});
     throw err;
   }
 
