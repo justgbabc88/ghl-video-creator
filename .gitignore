@@ -29,8 +29,9 @@ yarn-error.log*
 # vercel
 .vercel
 
-# runtime artifacts
-videos/
-recordings/
-narrations/
-tmp/
+# runtime artifacts (the worker writes these to OS tmpdir, but ignore here too if they leak in)
+/tmp/
+/output/
+*.tmp.mp4
+*.tmp.webm
+*.tmp.mp3
