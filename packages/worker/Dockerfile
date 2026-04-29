@@ -17,8 +17,9 @@ RUN npm ci --workspaces --include-workspace-root || npm install
 COPY packages/shared packages/shared
 COPY packages/worker packages/worker
 
-# Build worker (and shared transitively)
-RUN npm run build --workspace @ghl-vc/worker
+# Build shared first, then worker (worker depends on @ghl-vc/shared's compiled output)
+RUN npm run build --workspace @ghl-vc/shared \
+ && npm run build --workspace @ghl-vc/worker
 
 ENV NODE_ENV=production
 CMD ["node", "packages/worker/dist/index.js"]
