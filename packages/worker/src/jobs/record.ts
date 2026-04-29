@@ -67,15 +67,21 @@ async function recordImpl(
   let context: BrowserContext | null = null;
 
   try {
-    browser = await chromium.launch({ headless: true });
     const proxy = parseProxyUrl(process.env.RESIDENTIAL_PROXY_URL);
     if (proxy) console.log("[record] routing Playwright via residential proxy", proxy.server);
+
+    // Proxy must be set at launch level for authenticated proxies — Chromium
+    // throws ERR_PROXY_AUTH_UNSUPPORTED when proxy auth is supplied via newContext
+    // but the CONNECT challenge comes back before the context overrides apply.
+    browser = await chromium.launch({
+      headless: true,
+      proxy: proxy ?? undefined,
+    });
 
     context = await browser.newContext({
       viewport: { width: 1920, height: 1080 },
       recordVideo: { dir: tmpDir, size: { width: 1920, height: 1080 } },
       storageState: haveSession ? (account.ghl_session_cookies as any) : undefined,
-      proxy: proxy ?? undefined,
     });
 
     const page = await context.newPage();
