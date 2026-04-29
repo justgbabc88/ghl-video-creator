@@ -21,8 +21,27 @@ import { runRecorderActions } from "../lib/recorder.js";
  *  3. For each section, ask Claude to plan a small DSL of recorder actions based on
  *     the section's `ghl_actions` and the live DOM. Run those actions on the page
  *     while Playwright records video.
+ *
+ * Wrapped in a hard 8-minute timeout so a stuck Playwright session can't hang the
+ * whole pipeline indefinitely.
  */
 export async function recordWalkthrough(
+  videoId: string,
+  scriptId: string | null,
+  account: Account,
+): Promise<string> {
+  return Promise.race([
+    recordImpl(videoId, scriptId, account),
+    new Promise<string>((_resolve, reject) =>
+      setTimeout(
+        () => reject(new Error("recordWalkthrough timed out after 8 minutes")),
+        8 * 60 * 1000,
+      ),
+    ),
+  ]);
+}
+
+async function recordImpl(
   videoId: string,
   scriptId: string | null,
   account: Account,

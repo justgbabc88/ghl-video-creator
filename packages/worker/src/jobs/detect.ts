@@ -39,17 +39,23 @@ export async function detectFeatures(): Promise<void> {
   const html = await res.text();
   const $ = load(html);
 
-  // Build a map slug -> { title, url, summaryHtml }
+  // Build a map slug -> { title, url, summaryHtml }. Filter out non-feature paths
+  // (rss feeds, api endpoints, the index page itself) and obviously-empty link text.
+  const NON_FEATURE_SLUGS = new Set(["feed", "feed.rss", "rss", "index", ""]);
   const seen = new Map<string, { slug: string; title: string; url: string; html: string }>();
   $("a[href*='/changelog/']").each((_i, el) => {
     const href = $(el).attr("href") ?? "";
-    const m = href.match(/\/changelog\/([a-z0-9-]+)/i);
+    // Reject any path that includes /api/ or ends in .rss / .xml / .json — those aren't features
+    if (/\/api\//i.test(href) || /\.(rss|xml|json|atom)(?:$|\?)/i.test(href)) return;
+    const m = href.match(/\/changelog\/([a-z0-9-]+)\/?$/i);
     if (!m) return;
-    const slug = m[1];
+    const slug = m[1].toLowerCase();
+    if (NON_FEATURE_SLUGS.has(slug)) return;
     if (seen.has(slug)) return;
-    const title = $(el).text().trim() || slug.replace(/-/g, " ");
+    const title = $(el).text().trim();
+    if (!title || title.length < 3) return; // skip empty / icon-only links
+    if (/^(rss|feed|subscribe|all updates?|view all)$/i.test(title)) return;
     const url = href.startsWith("http") ? href : `https://ideas.gohighlevel.com${href}`;
-    // Pull a small chunk of nearby HTML so the content hash is stable + sensitive to edits
     const block = $(el).closest("article, li, section").html() ?? $(el).parent().html() ?? title;
     seen.set(slug, { slug, title, url, html: String(block).slice(0, 8000) });
   });
