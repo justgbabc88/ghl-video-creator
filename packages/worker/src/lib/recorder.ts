@@ -21,32 +21,32 @@ export async function runRecorderActions(page: Page, actions: RecorderAction[]):
 async function runOne(page: Page, a: RecorderAction): Promise<void> {
   switch (a.kind) {
     case "navigate":
-      await page.goto(a.url, { waitUntil: "domcontentloaded", timeout: 20_000 });
-      await page.waitForTimeout(1500);
+      await page.goto(a.url, { waitUntil: "domcontentloaded", timeout: 12_000 });
+      await page.waitForTimeout(1200);
       return;
     case "click": {
       const el = await locate(page, a.selector);
-      await el.scrollIntoViewIfNeeded();
+      await el.scrollIntoViewIfNeeded({ timeout: 3000 });
       await flash(page, el);
-      await el.click({ timeout: 8000 });
-      await page.waitForTimeout(800);
+      await el.click({ timeout: 3500 });
+      await page.waitForTimeout(600);
       return;
     }
     case "fill": {
       const el = await locate(page, a.selector);
-      await el.fill(a.text, { timeout: 8000 });
-      await page.waitForTimeout(400);
+      await el.fill(a.text, { timeout: 3500 });
+      await page.waitForTimeout(300);
       return;
     }
     case "press":
       await page.keyboard.press(a.key);
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(300);
       return;
     case "waitFor":
       if (a.selector) {
-        await page.waitForSelector(a.selector, { timeout: 10_000 });
+        await page.waitForSelector(a.selector, { timeout: 4_000 });
       } else {
-        await page.waitForTimeout(a.ms ?? 1000);
+        await page.waitForTimeout(Math.min(a.ms ?? 800, 3000));
       }
       return;
     case "scroll": {
@@ -61,14 +61,14 @@ async function runOne(page: Page, a: RecorderAction): Promise<void> {
     }
     case "hover": {
       const el = await locate(page, a.selector);
-      await el.hover({ timeout: 6000 });
-      await page.waitForTimeout(700);
+      await el.hover({ timeout: 3000 });
+      await page.waitForTimeout(500);
       return;
     }
     case "highlight": {
       const el = await locate(page, a.selector);
-      await el.scrollIntoViewIfNeeded();
-      await flash(page, el, a.ms ?? 1500);
+      await el.scrollIntoViewIfNeeded({ timeout: 2500 });
+      await flash(page, el, Math.min(a.ms ?? 1200, 1800));
       return;
     }
   }

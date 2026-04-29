@@ -22,10 +22,10 @@ import { runRecorderActions } from "../lib/recorder.js";
  *     the section's `ghl_actions` and the live DOM. Run those actions on the page
  *     while Playwright records video.
  *
- * Wrapped in a hard 15-minute timeout so a stuck Playwright session can't hang the
- * whole pipeline indefinitely. A typical 5-section silent walkthrough sums to ~7-8 min
- * of pacing alone — 15 min gives comfortable headroom for slow page loads + tool-use
- * planning calls.
+ * Wrapped in a hard 20-minute timeout so a stuck Playwright session can't hang the
+ * whole pipeline indefinitely. Each section is independently bounded by its own
+ * deadline (see `runOneSection`), so even if one section's actions stall, others
+ * still get a fair shot.
  */
 export async function recordWalkthrough(
   videoId: string,
@@ -36,8 +36,8 @@ export async function recordWalkthrough(
     recordImpl(videoId, scriptId, account),
     new Promise<string>((_resolve, reject) =>
       setTimeout(
-        () => reject(new Error("recordWalkthrough timed out after 15 minutes")),
-        15 * 60 * 1000,
+        () => reject(new Error("recordWalkthrough timed out after 20 minutes")),
+        20 * 60 * 1000,
       ),
     ),
   ]);
@@ -157,9 +157,21 @@ async function runOneSection(
   videoId: string,
   targetMs: number,
 ): Promise<void> {
-  // Ask Claude for a recorder plan
-  const dom = await readSimplifiedDOM(page);
-  const prompt = `Feature title: ${featureTitle}
+  // Hard deadline for this section: targetMs * 1.6, capped at 2.5 minutes. If actions
+  // overshoot we abort the remaining ones so a single bad selector chain can't
+  // monopolize the recording budget.
+  const deadlineMs = Math.min(150_000, Math.round(targetMs * 1.6));
+  const sectionStart = Date.now();
+  const remaining = () => deadlineMs - (Date.now() - sectionStart);
+
+  // 1) Plan with Claude (capped at 25s). Worst-case the call hangs and we move on.
+  let actions: RecorderAction[] = [];
+  try {
+    const dom = await Promise.race([
+      readSimplifiedDOM(page),
+      new Promise<string>((resolve) => setTimeout(() => resolve("(dom read timed out)"), 4000)),
+    ]);
+    const prompt = `Feature title: ${featureTitle}
 Section title: ${section.title}
 Approx seconds: ${Math.round(targetMs / 1000)}
 
@@ -172,14 +184,15 @@ ${(section.ghl_actions ?? []).map((a, i) => `${i + 1}. ${a}`).join("\n")}
 Currently visible on the page (truncated DOM):
 ${dom}
 
-Plan recorder steps that visually demonstrate what the narrator describes.`;
+Plan recorder steps that visually demonstrate what the narrator describes. Keep the
+total wall time under ${Math.round(targetMs / 1000)} seconds — fewer, more reliable
+steps beat many flaky ones.`;
 
-  let actions: RecorderAction[] = [];
-  try {
     const { data, usage } = await askClaudeJSON<RecorderAction[]>(prompt, {
       system: SYSTEM_PROMPT_PLAN,
       temperature: 0.3,
-      maxTokens: 1500,
+      maxTokens: 1200,
+      timeoutMs: 25_000,
     });
     actions = Array.isArray(data) ? data : [];
     await addVideoCost(videoId, "llm", claudeCostUsd(usage));
@@ -187,13 +200,19 @@ Plan recorder steps that visually demonstrate what the narrator describes.`;
     console.warn("[record] planning failed for section", section.title, err);
   }
 
-  const sectionStart = Date.now();
-  await runRecorderActions(page, actions);
+  // 2) Run actions, but stop if we hit the section deadline
+  const cap = Math.max(0, remaining() - 1500); // leave 1.5s for tail-padding
+  if (cap > 0) {
+    await Promise.race([
+      runRecorderActions(page, actions),
+      new Promise<void>((resolve) => setTimeout(resolve, cap)),
+    ]);
+  }
 
-  // Pad to the target section duration so audio mux aligns
-  const elapsed = Date.now() - sectionStart;
-  const remaining = targetMs - elapsed;
-  if (remaining > 0) await page.waitForTimeout(remaining);
+  // 3) Pad to targetMs (so audio aligns) but never beyond deadline
+  const padTo = Math.min(targetMs, deadlineMs);
+  const used = Date.now() - sectionStart;
+  if (used < padTo) await page.waitForTimeout(padTo - used);
 }
 
 function clampSectionMs(section: ScriptSection): number {
