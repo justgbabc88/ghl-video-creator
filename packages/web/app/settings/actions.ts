@@ -3,6 +3,22 @@
 import { revalidatePath } from "next/cache";
 import { serverClient } from "@/lib/supabase";
 
+/** Flip the pipeline_paused flag. Affects detect + pipeline cron ticks immediately. */
+export async function togglePipelinePause(formData: FormData) {
+  const desired = formData.get("paused") === "true";
+  const sb = serverClient();
+  const { data: existing } = await sb
+    .from("accounts")
+    .select("id")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (!existing) return;
+  await sb.from("accounts").update({ pipeline_paused: desired }).eq("id", existing.id);
+  revalidatePath("/", "layout"); // refresh layout banner everywhere
+  revalidatePath("/settings");
+}
+
 /**
  * Single-account MVP: there is at most one row in `accounts`. We always look
  * it up by id (oldest first) and update it, so changing the email doesn't

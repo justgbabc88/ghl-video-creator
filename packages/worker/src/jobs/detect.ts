@@ -13,9 +13,18 @@ const CHANGELOG_URL = "https://ideas.gohighlevel.com/changelog";
  */
 export async function detectFeatures(): Promise<void> {
   const sb = supabaseService();
-  const { data: account } = await sb.from("accounts").select("id").limit(1).maybeSingle();
+  const { data: account } = await sb
+    .from("accounts")
+    .select("id,pipeline_paused")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
   if (!account) {
     console.warn("[detect] no account yet — skipping");
+    return;
+  }
+  if (account.pipeline_paused) {
+    console.log("[detect] pipeline is paused — skipping detect tick");
     return;
   }
 

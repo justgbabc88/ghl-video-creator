@@ -39,6 +39,7 @@ export interface Account {
   review_required: boolean;
   voice_presets: VoicePreset[];
   notification_settings: NotificationSettings;
+  pipeline_paused: boolean;
   created_at: string;
 }
 

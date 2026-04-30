@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { serverClient } from "@/lib/supabase";
-import { saveSettings } from "./actions";
+import { saveSettings, togglePipelinePause } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -30,9 +30,41 @@ export default async function SettingsPage() {
   const notif = ((account?.notification_settings as NotificationSettings) ??
     {}) as NotificationSettings;
 
+  const isPaused = !!account?.pipeline_paused;
+
   return (
     <div className="space-y-8">
       <h1 className="text-2xl font-semibold">Settings</h1>
+
+      <section
+        className={`rounded-lg p-5 border flex items-center justify-between gap-4 ${
+          isPaused
+            ? "bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-700"
+            : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800"
+        }`}
+      >
+        <div>
+          <h2 className="font-semibold">Video creation</h2>
+          <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+            {isPaused
+              ? "Paused. The detector and the pipeline cron are skipping every tick — no new features are picked up and in-flight videos won't advance until you resume."
+              : "Running. The worker polls for new GHL features and walks them through the pipeline automatically."}
+          </p>
+        </div>
+        <form action={togglePipelinePause}>
+          <input type="hidden" name="paused" value={isPaused ? "false" : "true"} />
+          <button
+            type="submit"
+            className={`text-sm font-medium px-4 py-2 rounded ${
+              isPaused
+                ? "bg-green-600 text-white hover:bg-green-700"
+                : "bg-amber-600 text-white hover:bg-amber-700"
+            }`}
+          >
+            {isPaused ? "Resume creation" : "Pause creation"}
+          </button>
+        </form>
+      </section>
 
       <Section title="Connections">
         <div className="grid sm:grid-cols-2 gap-3">

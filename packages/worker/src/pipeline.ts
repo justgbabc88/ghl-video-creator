@@ -24,6 +24,18 @@ import { sendAlertEmail } from "./lib/email.js";
 export async function runPipeline(): Promise<void> {
   const sb = supabaseService();
 
+  // Honor the pause toggle: nothing in or out while paused.
+  const { data: pauseAcct } = await sb
+    .from("accounts")
+    .select("pipeline_paused")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (pauseAcct?.pipeline_paused) {
+    console.log("[pipeline] paused — skipping tick");
+    return;
+  }
+
   // 1) For every feature with status='new', kick off a video row + script generation.
   const { data: newFeatures } = await sb
     .from("features")
