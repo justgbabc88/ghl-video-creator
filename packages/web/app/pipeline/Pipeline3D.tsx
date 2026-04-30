@@ -1,7 +1,7 @@
 "use client";
 
 import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls, Text, RoundedBox, Stars } from "@react-three/drei";
+import { OrbitControls, Text } from "@react-three/drei";
 import { forwardRef, useRef, useState, useMemo, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import * as THREE from "three";
@@ -17,20 +17,20 @@ interface Stage {
   id: string;
   label: string;
   color: string;
-  emissive: string;
+  shadow: string;
   x: number;
-  y: number;
 }
 
+// Saturated 8-bit-ish palette
 const STAGES: Stage[] = [
-  { id: "queued", label: "Queued", color: "#94a3b8", emissive: "#475569", x: -15, y: 0 },
-  { id: "recording", label: "Recording", color: "#3b82f6", emissive: "#1d4ed8", x: -10, y: 0 },
-  { id: "narrating", label: "Narrating", color: "#8b5cf6", emissive: "#6d28d9", x: -5, y: 0 },
-  { id: "rendering", label: "Rendering", color: "#ec4899", emissive: "#be185d", x: 0, y: 0 },
-  { id: "review", label: "Review", color: "#f59e0b", emissive: "#b45309", x: 5, y: 0 },
-  { id: "publishing", label: "Publishing", color: "#10b981", emissive: "#047857", x: 10, y: 0 },
-  { id: "published", label: "Published", color: "#22c55e", emissive: "#15803d", x: 15, y: 0 },
-  { id: "failed", label: "Failed", color: "#ef4444", emissive: "#991b1b", x: 0, y: 0 }, // junkyard handled separately
+  { id: "queued", label: "QUEUED", color: "#94a3b8", shadow: "#475569", x: -15 },
+  { id: "recording", label: "RECORDING", color: "#3b82f6", shadow: "#1e3a8a", x: -10 },
+  { id: "narrating", label: "NARRATING", color: "#a855f7", shadow: "#581c87", x: -5 },
+  { id: "rendering", label: "RENDERING", color: "#ec4899", shadow: "#831843", x: 0 },
+  { id: "review", label: "REVIEW", color: "#f59e0b", shadow: "#78350f", x: 5 },
+  { id: "publishing", label: "PUBLISHING", color: "#10b981", shadow: "#064e3b", x: 10 },
+  { id: "published", label: "PUBLISHED", color: "#22c55e", shadow: "#14532d", x: 15 },
+  { id: "failed", label: "FAILED", color: "#ef4444", shadow: "#7f1d1d", x: 0 },
 ];
 
 const STAGE_BY_ID = Object.fromEntries(STAGES.map((s) => [s.id, s]));
@@ -66,29 +66,26 @@ export function Pipeline3D({ videos }: { videos: PipelineVideo[] }) {
   return (
     <div className="absolute inset-0">
       <Canvas
-        camera={{ position: [0, 7, 18], fov: 55 }}
-        dpr={[1, 1.75]}
-        gl={{ antialias: true, powerPreference: "high-performance" }}
+        // Low DPR = chunky framebuffer pixels. The CSS image-rendering: pixelated
+        // ensures the upscale is a hard nearest-neighbor — that's what gives the 8-bit feel.
+        dpr={[0.45, 0.45]}
+        camera={{ position: [0, 8, 18], fov: 55 }}
+        gl={{ antialias: false, powerPreference: "high-performance" }}
+        style={{ imageRendering: "pixelated", height: "100%", width: "100%" }}
       >
         <Suspense fallback={null}>
-          <color attach="background" args={["#020617"]} />
-          <fog attach="fog" args={["#020617", 28, 60]} />
+          <color attach="background" args={["#0b0f24"]} />
 
-          <ambientLight intensity={0.35} />
-          <directionalLight position={[6, 10, 8]} intensity={1.1} color="#ffffff" />
-          <pointLight position={[-15, 8, 4]} intensity={0.7} color="#3b82f6" />
-          <pointLight position={[15, 8, 4]} intensity={0.7} color="#22c55e" />
+          {/* Hard cartoon lighting — flat hemisphere + a single key directional. No fog,
+              no point-light bloom, nothing that would smear the chunky look. */}
+          <hemisphereLight args={["#7dd3fc", "#1e1b4b", 0.55]} />
+          <directionalLight position={[8, 14, 6]} intensity={1.0} color="#ffffff" />
 
-          <Stars radius={120} depth={70} count={3500} factor={3.4} fade speed={0.4} />
-
+          <PixelStars count={140} />
           <Road />
-          <Shoulder />
-
           {STAGES.filter((s) => s.id !== "failed").map((s) => (
-            <GantrySign key={s.id} stage={s} count={counts[s.id] ?? 0} />
+            <PixelSign key={s.id} stage={s} count={counts[s.id] ?? 0} />
           ))}
-
-          {/* Junkyard area for failed cars (offset way to the side, off the road) */}
           <Junkyard count={counts["failed"] ?? 0} />
 
           {positioned.map(({ video, stage, offsetIndex, total }) =>
@@ -96,7 +93,7 @@ export function Pipeline3D({ videos }: { videos: PipelineVideo[] }) {
               <Car
                 key={video.id}
                 video={video}
-                stage={{ ...stage, x: 18, y: 0 }}
+                stage={{ ...stage, x: 18 }}
                 offsetIndex={offsetIndex}
                 total={total}
                 inJunkyard
@@ -112,13 +109,12 @@ export function Pipeline3D({ videos }: { videos: PipelineVideo[] }) {
             ),
           )}
 
+          {/* No autoRotate — camera holds still until the user drags. */}
           <OrbitControls
             enablePan={false}
             minDistance={9}
             maxDistance={36}
             maxPolarAngle={Math.PI / 2.05}
-            autoRotate
-            autoRotateSpeed={0.35}
           />
         </Suspense>
       </Canvas>
@@ -126,10 +122,38 @@ export function Pipeline3D({ videos }: { videos: PipelineVideo[] }) {
   );
 }
 
-/* ─── Road & environment ────────────────────────────────────────────────────── */
+/* ─── Static pixel stars (replaces drei's <Stars> for a chunkier look) ──────── */
+
+function PixelStars({ count = 120 }: { count?: number }) {
+  const positions = useMemo(() => {
+    const arr: [number, number, number][] = [];
+    for (let i = 0; i < count; i++) {
+      const r = 35 + Math.random() * 25;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.random() * Math.PI * 0.5; // upper hemisphere only
+      arr.push([
+        r * Math.sin(phi) * Math.cos(theta),
+        r * Math.cos(phi) + 6,
+        r * Math.sin(phi) * Math.sin(theta) - 8,
+      ]);
+    }
+    return arr;
+  }, [count]);
+  return (
+    <group>
+      {positions.map((p, i) => (
+        <mesh key={i} position={p}>
+          <boxGeometry args={[0.18, 0.18, 0.18]} />
+          <meshBasicMaterial color="#f8fafc" />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+/* ─── Road (boxy, saturated, no AA) ─────────────────────────────────────────── */
 
 function Road() {
-  // Center dashed line markings — one yellow dash every 2 units along x, near z=0
   const dashes = useMemo(() => {
     const n = Math.floor(ROAD_LENGTH / 2);
     return Array.from({ length: n }, (_, i) => -ROAD_LENGTH / 2 + 1 + i * 2);
@@ -137,121 +161,88 @@ function Road() {
 
   return (
     <group>
-      {/* Asphalt base */}
+      {/* Asphalt — flat lambert for the chunky cell-shade vibe */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
         <planeGeometry args={[ROAD_LENGTH, ROAD_WIDTH]} />
-        <meshStandardMaterial color="#1e293b" roughness={0.95} metalness={0.05} />
+        <meshLambertMaterial color="#1f2937" />
       </mesh>
 
-      {/* White edge stripes */}
+      {/* Edge stripes — bright pixel-white */}
       {[-ROAD_WIDTH / 2 + 0.18, ROAD_WIDTH / 2 - 0.18].map((z, i) => (
         <mesh key={i} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, z]}>
-          <planeGeometry args={[ROAD_LENGTH, 0.12]} />
-          <meshStandardMaterial
-            color="#f1f5f9"
-            emissive="#f1f5f9"
-            emissiveIntensity={0.25}
-            roughness={0.6}
-          />
+          <planeGeometry args={[ROAD_LENGTH, 0.18]} />
+          <meshBasicMaterial color="#fefefe" />
         </mesh>
       ))}
 
       {/* Yellow dashed center line */}
       {dashes.map((x) => (
         <mesh key={x} rotation={[-Math.PI / 2, 0, 0]} position={[x, 0.005, 0]}>
-          <planeGeometry args={[1.0, 0.12]} />
-          <meshStandardMaterial
-            color="#fbbf24"
-            emissive="#fbbf24"
-            emissiveIntensity={0.45}
-            roughness={0.6}
-          />
+          <planeGeometry args={[1.0, 0.16]} />
+          <meshBasicMaterial color="#fde047" />
         </mesh>
       ))}
-    </group>
-  );
-}
 
-function Shoulder() {
-  // Dirt-grey shoulders + far ground plane so the road doesn't float in space
-  return (
-    <group>
+      {/* Surrounding ground — simple dark plane so the road has context */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.001, 0]}>
         <planeGeometry args={[ROAD_LENGTH * 4, ROAD_WIDTH * 8]} />
-        <meshStandardMaterial color="#0b1220" roughness={1} metalness={0} />
+        <meshLambertMaterial color="#0b1220" />
       </mesh>
     </group>
   );
 }
 
-/* ─── Highway gantry sign (replaces the pillar) ─────────────────────────────── */
+/* ─── Highway sign in pixel style (boxy posts + glowing panel) ──────────────── */
 
-function GantrySign({ stage, count }: { stage: Stage; count: number }) {
-  const ref = useRef<THREE.MeshStandardMaterial>(null);
-  useFrame((state) => {
-    if (!ref.current) return;
-    ref.current.emissiveIntensity =
-      0.35 + Math.sin(state.clock.elapsedTime * 1.6 + stage.x * 0.3) * 0.12;
-  });
-
+function PixelSign({ stage, count }: { stage: Stage; count: number }) {
   const postZ = ROAD_WIDTH / 2 + 0.15;
   const postHeight = 5.2;
 
   return (
     <group position={[stage.x, 0, 0]}>
-      {/* Two posts straddling the road */}
+      {/* Two posts (boxes — chunkier than cylinders) */}
       <mesh position={[0, postHeight / 2, -postZ]}>
-        <cylinderGeometry args={[0.07, 0.09, postHeight, 8]} />
-        <meshStandardMaterial color="#475569" metalness={0.7} roughness={0.4} />
+        <boxGeometry args={[0.22, postHeight, 0.22]} />
+        <meshLambertMaterial color="#475569" />
       </mesh>
       <mesh position={[0, postHeight / 2, postZ]}>
-        <cylinderGeometry args={[0.07, 0.09, postHeight, 8]} />
-        <meshStandardMaterial color="#475569" metalness={0.7} roughness={0.4} />
+        <boxGeometry args={[0.22, postHeight, 0.22]} />
+        <meshLambertMaterial color="#475569" />
       </mesh>
 
       {/* Cross-beam */}
       <mesh position={[0, postHeight + 0.1, 0]}>
-        <boxGeometry args={[0.18, 0.18, postZ * 2]} />
-        <meshStandardMaterial color="#475569" metalness={0.7} roughness={0.4} />
+        <boxGeometry args={[0.28, 0.28, postZ * 2]} />
+        <meshLambertMaterial color="#475569" />
       </mesh>
 
-      {/* Sign panel hanging just below the beam */}
-      <RoundedBox
-        args={[2.6, 1.05, 0.14]}
-        radius={0.08}
-        smoothness={3}
-        position={[0, postHeight - 0.45, 0]}
-      >
-        <meshStandardMaterial
-          ref={ref}
-          color={stage.color}
-          emissive={stage.emissive}
-          emissiveIntensity={0.45}
-          roughness={0.4}
-          metalness={0.5}
-        />
-      </RoundedBox>
+      {/* Sign panel — solid color block, no gradient/PBR */}
+      <mesh position={[0, postHeight - 0.45, 0]}>
+        <boxGeometry args={[2.6, 1.05, 0.18]} />
+        <meshLambertMaterial color={stage.color} emissive={stage.shadow} emissiveIntensity={0.6} />
+      </mesh>
 
-      {/* Sign text — a touch in front of the panel so it isn't z-fighting */}
+      {/* Sign text */}
       <Text
-        position={[0, postHeight - 0.32, 0.085]}
-        fontSize={0.36}
-        color="#f8fafc"
+        position={[0, postHeight - 0.32, 0.105]}
+        fontSize={0.34}
+        color="#ffffff"
         anchorX="center"
         anchorY="middle"
-        outlineWidth={0.015}
-        outlineColor="#0b1220"
+        outlineWidth={0.025}
+        outlineColor={stage.shadow}
+        characters="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789×: "
       >
         {stage.label}
       </Text>
       {count > 0 ? (
         <Text
-          position={[0, postHeight - 0.7, 0.085]}
-          fontSize={0.24}
-          color="#fde68a"
+          position={[0, postHeight - 0.7, 0.105]}
+          fontSize={0.26}
+          color="#fde047"
           anchorX="center"
           anchorY="middle"
-          outlineWidth={0.012}
+          outlineWidth={0.02}
           outlineColor="#0b1220"
         >
           {`× ${count}`}
@@ -264,28 +255,31 @@ function GantrySign({ stage, count }: { stage: Stage; count: number }) {
 function Junkyard({ count }: { count: number }) {
   return (
     <group position={[18, 0, 6]}>
-      {/* Faded sign on a single post */}
       <mesh position={[0, 1.6, 0]}>
-        <cylinderGeometry args={[0.06, 0.07, 3.2, 8]} />
-        <meshStandardMaterial color="#3f3f46" metalness={0.5} roughness={0.6} />
+        <boxGeometry args={[0.18, 3.2, 0.18]} />
+        <meshLambertMaterial color="#3f3f46" />
       </mesh>
-      <RoundedBox args={[1.8, 0.7, 0.1]} radius={0.06} position={[0, 2.7, 0]}>
-        <meshStandardMaterial color="#7f1d1d" emissive="#991b1b" emissiveIntensity={0.45} />
-      </RoundedBox>
+      <mesh position={[0, 2.7, 0]}>
+        <boxGeometry args={[1.8, 0.7, 0.14]} />
+        <meshLambertMaterial color="#7f1d1d" emissive="#dc2626" emissiveIntensity={0.5} />
+      </mesh>
       <Text
-        position={[0, 2.78, 0.06]}
-        fontSize={0.28}
-        color="#fee2e2"
+        position={[0, 2.78, 0.08]}
+        fontSize={0.3}
+        color="#fef2f2"
         anchorX="center"
         anchorY="middle"
+        outlineWidth={0.02}
+        outlineColor="#7f1d1d"
+        characters="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789×× "
       >
-        Failed
+        FAILED
       </Text>
       {count > 0 ? (
         <Text
-          position={[0, 2.5, 0.06]}
-          fontSize={0.2}
-          color="#fca5a5"
+          position={[0, 2.5, 0.08]}
+          fontSize={0.22}
+          color="#fde047"
           anchorX="center"
           anchorY="middle"
         >
@@ -296,7 +290,7 @@ function Junkyard({ count }: { count: number }) {
   );
 }
 
-/* ─── Car ───────────────────────────────────────────────────────────────────── */
+/* ─── Car (pixelated: chunky boxes, hexagonal wheels, no PBR materials) ─────── */
 
 const ACTIVE_STAGES = new Set([
   "queued",
@@ -327,8 +321,6 @@ function Car({
   const wheelRR = useRef<THREE.Group>(null);
   const [hovered, setHovered] = useState(false);
 
-  // For a stage on the road: queue cars side-by-side in two lanes (z = -1 and +1),
-  // alternating, then push back along x for additional pairs.
   const lane = offsetIndex % 2 === 0 ? -1 : 1;
   const xBack = -Math.floor(offsetIndex / 2) * 1.9;
 
@@ -338,8 +330,10 @@ function Car({
   useFrame((state) => {
     const t = state.clock.elapsedTime + offsetIndex * 0.6;
     if (ref.current) {
-      ref.current.position.y = 0.18 + Math.sin(t * 2.2) * 0.025;
-      ref.current.rotation.z = isFailed ? -0.15 : Math.sin(t * 1.7) * 0.01;
+      // Snap bobbing to discrete steps for a stop-motion feel
+      const bob = Math.round(Math.sin(t * 2.2) * 4) / 100;
+      ref.current.position.y = 0.18 + bob;
+      ref.current.rotation.z = isFailed ? -0.15 : 0;
     }
     if (isActive) {
       const spin = state.clock.elapsedTime * 6;
@@ -352,10 +346,7 @@ function Car({
 
   const truncatedTitle =
     video.title.length > 26 ? video.title.slice(0, 24) + "…" : video.title;
-  const bodyColor = stage.color;
-  const roofColor = stage.emissive;
 
-  // Failed cars are scattered in the junkyard at varied positions
   const positionX = inJunkyard ? stage.x + (offsetIndex % 3) * 1.4 - 1.4 : stage.x + xBack;
   const positionZ = inJunkyard ? -2 + Math.floor(offsetIndex / 3) * 1.6 : lane;
   const baseRotationY = isFailed ? Math.PI * 0.85 : 0;
@@ -380,69 +371,51 @@ function Car({
       }}
       scale={hovered ? 1.12 : 1}
     >
-      {/* Body */}
-      <RoundedBox args={[1.8, 0.45, 0.85]} radius={0.12} smoothness={3} position={[0, 0.22, 0]}>
-        <meshStandardMaterial
-          color={bodyColor}
-          emissive={stage.emissive}
-          emissiveIntensity={hovered ? 0.7 : 0.35}
-          roughness={0.35}
-          metalness={0.75}
-        />
-      </RoundedBox>
-
-      {/* Cabin */}
-      <RoundedBox args={[1.0, 0.36, 0.78]} radius={0.1} smoothness={3} position={[-0.05, 0.62, 0]}>
-        <meshStandardMaterial
-          color={roofColor}
-          emissive={stage.emissive}
-          emissiveIntensity={0.25}
-          roughness={0.5}
-          metalness={0.6}
-        />
-      </RoundedBox>
-
-      {/* Windshield */}
-      <mesh position={[0.46, 0.6, 0]} rotation={[0, 0, -0.5]}>
-        <boxGeometry args={[0.06, 0.36, 0.7]} />
-        <meshStandardMaterial
-          color="#0ea5e9"
-          transparent
-          opacity={0.45}
-          roughness={0.05}
-          metalness={0.9}
-          emissive="#0369a1"
-          emissiveIntensity={0.2}
-        />
+      {/* Body — flat colored block */}
+      <mesh position={[0, 0.22, 0]}>
+        <boxGeometry args={[1.8, 0.45, 0.85]} />
+        <meshLambertMaterial color={stage.color} emissive={stage.shadow} emissiveIntensity={hovered ? 0.5 : 0.25} />
       </mesh>
 
-      {/* Wheels — y=0 since car is already lifted to y=0.18 (wheel radius) */}
+      {/* Cabin */}
+      <mesh position={[-0.05, 0.62, 0]}>
+        <boxGeometry args={[1.0, 0.36, 0.78]} />
+        <meshLambertMaterial color={stage.shadow} />
+      </mesh>
+
+      {/* Windshield slab */}
+      <mesh position={[0.46, 0.62, 0]}>
+        <boxGeometry args={[0.06, 0.32, 0.7]} />
+        <meshLambertMaterial color="#0ea5e9" />
+      </mesh>
+
+      {/* Wheels — hexagonal cylinder for that boxy 8-bit feel */}
       <Wheel ref={wheelFL} position={[0.55, 0, 0.46]} />
       <Wheel ref={wheelFR} position={[0.55, 0, -0.46]} />
       <Wheel ref={wheelRL} position={[-0.55, 0, 0.46]} />
       <Wheel ref={wheelRR} position={[-0.55, 0, -0.46]} />
 
-      {/* Headlights */}
+      {/* Headlights — small white cubes */}
       <mesh position={[0.92, 0.27, 0.3]}>
-        <sphereGeometry args={[0.07, 12, 12]} />
-        <meshStandardMaterial color="#fff7ed" emissive="#fde68a" emissiveIntensity={1.5} />
+        <boxGeometry args={[0.08, 0.1, 0.1]} />
+        <meshBasicMaterial color="#fef9c3" />
       </mesh>
       <mesh position={[0.92, 0.27, -0.3]}>
-        <sphereGeometry args={[0.07, 12, 12]} />
-        <meshStandardMaterial color="#fff7ed" emissive="#fde68a" emissiveIntensity={1.5} />
+        <boxGeometry args={[0.08, 0.1, 0.1]} />
+        <meshBasicMaterial color="#fef9c3" />
       </mesh>
 
-      {/* Tail lights */}
+      {/* Tail lights — small red cubes */}
       <mesh position={[-0.92, 0.27, 0.3]}>
-        <sphereGeometry args={[0.06, 12, 12]} />
-        <meshStandardMaterial color="#fca5a5" emissive="#dc2626" emissiveIntensity={1.2} />
+        <boxGeometry args={[0.08, 0.1, 0.1]} />
+        <meshBasicMaterial color="#dc2626" />
       </mesh>
       <mesh position={[-0.92, 0.27, -0.3]}>
-        <sphereGeometry args={[0.06, 12, 12]} />
-        <meshStandardMaterial color="#fca5a5" emissive="#dc2626" emissiveIntensity={1.2} />
+        <boxGeometry args={[0.08, 0.1, 0.1]} />
+        <meshBasicMaterial color="#dc2626" />
       </mesh>
 
-      {/* Floating title — counter-rotated so it always reads forward to camera */}
+      {/* Floating title — counter-rotated so it always reads forward */}
       <group rotation={[0, -baseRotationY, 0]}>
         <Text
           position={[0, 1.45, 0]}
@@ -451,8 +424,8 @@ function Car({
           anchorX="center"
           anchorY="middle"
           maxWidth={3.2}
-          outlineWidth={0.012}
-          outlineColor="#0f172a"
+          outlineWidth={0.018}
+          outlineColor="#0b1220"
         >
           {truncatedTitle}
         </Text>
@@ -465,9 +438,10 @@ const Wheel = forwardRef<THREE.Group, { position: [number, number, number] }>(
   function Wheel(props, ref) {
     return (
       <group ref={ref} position={props.position}>
+        {/* 6-segment cylinder — hexagonal, very 8-bit */}
         <mesh rotation={[Math.PI / 2, 0, 0]}>
-          <cylinderGeometry args={[0.18, 0.18, 0.14, 18]} />
-          <meshStandardMaterial color="#0f172a" roughness={0.7} metalness={0.4} />
+          <cylinderGeometry args={[0.18, 0.18, 0.14, 6]} />
+          <meshLambertMaterial color="#0f172a" />
         </mesh>
       </group>
     );
