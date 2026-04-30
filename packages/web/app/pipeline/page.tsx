@@ -43,23 +43,19 @@ export default async function PipelinePage() {
   return (
     // Fixed inset-0 escapes the parent layout's max-width container, covers the
     // header + footer chrome, and gives the canvas the entire viewport.
-    <div className="fixed inset-0 z-40 bg-black">
+    <div className="fixed inset-0 z-40 bg-[#cfd8c5]">
       <Pipeline3D videos={videos} />
 
-      {/* Floating overlay UI — pointer-events-none on the wrapper so the canvas
-          stays draggable everywhere, then -auto on the actual interactive bits. */}
+      {/* Floating overlay UI — pointer-events-none on the wrapper so canvas
+          clicks still register, then -auto only on the back link. */}
       <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-5 left-6 text-white pointer-events-auto">
+        <div className="absolute top-3 left-4 pointer-events-auto">
           <Link
             href="/"
-            className="text-xs text-slate-300 hover:text-white inline-flex items-center gap-1"
+            className="text-[11px] uppercase tracking-wider text-amber-50 bg-stone-900/70 hover:bg-stone-900 px-2 py-1 rounded inline-flex items-center gap-1 font-mono"
           >
-            <span aria-hidden>←</span> Back to dashboard
+            <span aria-hidden>←</span> Dashboard
           </Link>
-          <h1 className="text-2xl font-semibold mt-1 drop-shadow">Pipeline</h1>
-          <p className="text-xs text-slate-400 mt-1">
-            Drag to orbit · scroll to zoom · click a car to open it
-          </p>
         </div>
       </div>
     </div>
