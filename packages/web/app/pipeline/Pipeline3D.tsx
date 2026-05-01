@@ -112,7 +112,13 @@ export function Pipeline3D({ videos }: { videos: PipelineVideo[] }) {
   const router = useRouter();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const [hover, setHover] = useState<{ id: string; title: string; x: number; y: number } | null>(null);
+  const [hover, setHover] = useState<{
+    id: string;
+    title: string;
+    brand: string;
+    x: number;
+    y: number;
+  } | null>(null);
 
   // Lay every video out at a station + lane offset.
   const placed = useMemo(() => {
@@ -193,7 +199,13 @@ export function Pipeline3D({ videos }: { videos: PipelineVideo[] }) {
       (r) => p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h,
     );
     if (hit) {
-      setHover({ id: hit.video.id, title: hit.video.title, x: e.clientX, y: e.clientY });
+      setHover({
+        id: hit.video.id,
+        title: hit.video.title,
+        brand: pickCarKind(hit.video.id).name,
+        x: e.clientX,
+        y: e.clientY,
+      });
       if (canvasRef.current) canvasRef.current.style.cursor = "pointer";
     } else {
       setHover(null);
@@ -226,7 +238,7 @@ export function Pipeline3D({ videos }: { videos: PipelineVideo[] }) {
       />
       {hover ? (
         <div
-          className="pointer-events-none fixed z-50 px-2 py-1 rounded bg-amber-50 text-stone-900 text-xs font-semibold shadow-md border border-stone-700"
+          className="pointer-events-none fixed z-50 px-2 py-1 rounded bg-amber-50 text-stone-900 text-xs shadow-md border border-stone-700"
           style={{
             left: hover.x + 14,
             top: hover.y + 14,
@@ -234,7 +246,10 @@ export function Pipeline3D({ videos }: { videos: PipelineVideo[] }) {
             maxWidth: 280,
           }}
         >
-          {hover.title}
+          <div className="text-[10px] uppercase tracking-wider text-stone-500">
+            {hover.brand}
+          </div>
+          <div className="font-semibold leading-tight">{hover.title}</div>
         </div>
       ) : null}
     </div>
@@ -580,6 +595,42 @@ function drawJunkyard(ctx: CanvasRenderingContext2D, count: number) {
   }
 }
 
+/* ── Supercar lineup ──────────────────────────────────────────────────────── */
+/* Each video is hashed to one of these — assignment is deterministic by ID,
+   so the same video always shows the same car. Cars are 18×10 (or 20×10 for
+   the wider hypercars), drawn top-down with the front of the car pointing
+   right (+X). Brand silhouettes share a base shape but vary cockpit position,
+   stripes, intakes, exhausts and headlight pattern. */
+
+interface CarKind {
+  id: string;
+  name: string;       // shown in tooltip
+  primary: string;    // body color
+  accent: string;     // stripe / detail color
+  dark: string;       // bottom shade band
+  width: number;      // 18 or 20
+  draw: (ctx: CanvasRenderingContext2D, x: number, y: number, k: CarKind) => void;
+}
+
+const CAR_KINDS: CarKind[] = [
+  { id: "ferrari", name: "Ferrari F8 Tributo",     primary: "#d42a2a", accent: "#1a1a1a", dark: "#7a0e0e", width: 18, draw: drawFerrari },
+  { id: "lambo",   name: "Lamborghini Huracán", primary: "#f7d600", accent: "#1a1a1a", dark: "#9c8800", width: 18, draw: drawLambo },
+  { id: "porsche", name: "Porsche 911 GT3",         primary: "#e2e2e2", accent: "#1a1a1a", dark: "#8c8c8c", width: 18, draw: drawPorsche },
+  { id: "pagani",  name: "Pagani Huayra",           primary: "#1f2c47", accent: "#c9a25a", dark: "#0d1424", width: 18, draw: drawPagani },
+  { id: "mclaren", name: "McLaren 720S",            primary: "#ff7a1a", accent: "#1a1a1a", dark: "#8a3f00", width: 18, draw: drawMcLaren },
+  { id: "bugatti", name: "Bugatti Chiron",          primary: "#244ea3", accent: "#0a0f24", dark: "#0f2566", width: 20, draw: drawBugatti },
+  { id: "koenig",  name: "Koenigsegg Jesko",        primary: "#f4f4f4", accent: "#c5a455", dark: "#9a9a9a", width: 18, draw: drawKoenigsegg },
+  { id: "aston",   name: "Aston Martin Valkyrie",   primary: "#2d6552", accent: "#d4af37", dark: "#16382a", width: 18, draw: drawAston },
+];
+
+function pickCarKind(videoId: string): CarKind {
+  let h = 0;
+  for (let i = 0; i < videoId.length; i++) {
+    h = ((h * 31) + videoId.charCodeAt(i)) >>> 0;
+  }
+  return CAR_KINDS[h % CAR_KINDS.length];
+}
+
 /* ── Cars ─────────────────────────────────────────────────────────────────── */
 
 function drawCars(
@@ -594,70 +645,265 @@ function drawCars(
       continue;
     }
 
-    const baseX = stage.x - 22 + col * 8;
+    const kind = pickCarKind(video.id);
+    // Slightly wider columns to make room for the 20-wide Bugatti without
+    // eating its neighbor too aggressively.
+    const baseX = stage.x - 22 + col * 9;
     const baseY = row === 0 ? ROAD_CENTER - 7 : ROAD_CENTER + 5;
-    drawCar(ctx, video, stage, baseX, baseY, t, hitsRef);
+    drawCar(ctx, video, kind, baseX, baseY, hitsRef);
   }
 }
 
 function drawCar(
   ctx: CanvasRenderingContext2D,
   video: PipelineVideo,
-  stage: Stage,
+  kind: CarKind,
   x: number,
   y: number,
-  t: number,
   hitsRef: { current: Array<{ x: number; y: number; w: number; h: number; video: PipelineVideo }> },
 ) {
-  // tiny idle bob — discrete steps for stop-motion feel
-  const bob = Math.round(Math.sin(t * 2.4 + x * 0.13) * 1) * 0;
-  const carY = y + bob;
-
-  // shadow
+  // shadow under car
   ctx.fillStyle = PAL.shadow;
-  ctx.fillRect(x, carY + 7, 18, 2);
+  ctx.fillRect(x, y + 7, kind.width, 2);
 
-  // body (top-down: car is 18 wide, 10 tall, headlights pointing right)
-  ctx.fillStyle = stage.carBody;
-  ctx.fillRect(x, carY, 18, 8);
-  // shade band along bottom
-  ctx.fillStyle = stage.carShade;
-  ctx.fillRect(x, carY + 6, 18, 2);
+  // wheels first so the body sits over the inner edges (top-down look)
+  ctx.fillStyle = "#0f0c0a";
+  ctx.fillRect(x + 2, y - 1, 3, 2);
+  ctx.fillRect(x + kind.width - 5, y - 1, 3, 2);
+  ctx.fillRect(x + 2, y + 8, 3, 2);
+  ctx.fillRect(x + kind.width - 5, y + 8, 3, 2);
+
+  // delegate the body to the brand-specific renderer
+  kind.draw(ctx, x, y, kind);
+
+  // hit rect — generous so small variant widths still feel clickable
+  hitsRef.current.push({ x: x - 1, y: y - 1, w: kind.width + 2, h: 12, video });
+}
+
+/* ── Brand silhouettes (each function only paints the body — wheels/shadow
+       are already drawn by drawCar). All views are top-down with front=right. */
+
+function carBase(ctx: CanvasRenderingContext2D, x: number, y: number, k: CarKind) {
+  // base body block
+  ctx.fillStyle = k.primary;
+  ctx.fillRect(x, y, k.width, 8);
+  // bottom shade band
+  ctx.fillStyle = k.dark;
+  ctx.fillRect(x, y + 6, k.width, 2);
   // top highlight
-  ctx.fillStyle = lighten(stage.carBody, 20);
-  ctx.fillRect(x, carY, 18, 1);
+  ctx.fillStyle = lighten(k.primary, 22);
+  ctx.fillRect(x, y, k.width, 1);
+  // tail lights
+  ctx.fillStyle = "#cc3a3a";
+  ctx.fillRect(x, y + 1, 1, 1);
+  ctx.fillRect(x, y + 6, 1, 1);
+}
 
-  // hood/roof inner panel
-  ctx.fillStyle = stage.carShade;
-  ctx.fillRect(x + 5, carY + 1, 9, 6);
-  ctx.fillStyle = stage.carBody;
-  ctx.fillRect(x + 6, carY + 2, 7, 4);
-
-  // windshield (front, right side)
-  ctx.fillStyle = "#9ec5d6";
-  ctx.fillRect(x + 11, carY + 2, 2, 4);
-  // back window
-  ctx.fillStyle = "#5d7a85";
-  ctx.fillRect(x + 6, carY + 2, 2, 4);
-
-  // headlights (right edge)
+function drawFerrari(ctx: CanvasRenderingContext2D, x: number, y: number, k: CarKind) {
+  carBase(ctx, x, y, k);
+  // Cockpit pulled slightly back (mid-engine)
+  ctx.fillStyle = k.dark;
+  ctx.fillRect(x + 5, y + 1, 8, 6);
+  ctx.fillStyle = k.primary;
+  ctx.fillRect(x + 6, y + 2, 6, 4);
+  // Twin black hood stripes (signature Ferrari racing stripes)
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + 12, y + 2, 4, 1);
+  ctx.fillRect(x + 12, y + 5, 4, 1);
+  // Front splitter / nose
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + 16, y + 3, 1, 2);
+  // Quad exhausts at rear (silver squares)
+  ctx.fillStyle = "#bcbcbc";
+  ctx.fillRect(x, y + 3, 1, 1);
+  ctx.fillRect(x, y + 4, 1, 1);
+  // Windshield tint
+  ctx.fillStyle = "#7fa8b8";
+  ctx.fillRect(x + 11, y + 3, 1, 2);
+  // Headlights — split halogen pair
   ctx.fillStyle = "#fff4dc";
-  ctx.fillRect(x + 17, carY + 1, 1, 1);
-  ctx.fillRect(x + 17, carY + 6, 1, 1);
-  // tail lights (left edge)
-  ctx.fillStyle = "#c44";
-  ctx.fillRect(x, carY + 1, 1, 1);
-  ctx.fillRect(x, carY + 6, 1, 1);
+  ctx.fillRect(x + 17, y + 1, 1, 1);
+  ctx.fillRect(x + 17, y + 6, 1, 1);
+}
 
-  // wheels — small dark rects (top-down)
-  ctx.fillStyle = "#1f1a16";
-  ctx.fillRect(x + 2, carY - 1, 3, 2);
-  ctx.fillRect(x + 13, carY - 1, 3, 2);
-  ctx.fillRect(x + 2, carY + 8, 3, 2);
-  ctx.fillRect(x + 13, carY + 8, 3, 2);
+function drawLambo(ctx: CanvasRenderingContext2D, x: number, y: number, k: CarKind) {
+  carBase(ctx, x, y, k);
+  // Hard angular wedge — clip the front nose corners with the road color
+  // so the silhouette reads as a Lambo's signature sharp wedge.
+  ctx.fillStyle = PAL.asphalt;
+  ctx.fillRect(x + 16, y, 2, 2);
+  ctx.fillRect(x + 16, y + 6, 2, 2);
+  // Cockpit pulled forward, narrow (Huracán driver-forward look)
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + 4, y + 1, 7, 6);
+  ctx.fillStyle = k.dark;
+  ctx.fillRect(x + 5, y + 2, 5, 4);
+  // Side intakes flanking the cockpit
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + 4, y, 2, 1);
+  ctx.fillRect(x + 4, y + 7, 2, 1);
+  // Y-shaped headlight (3 pixels)
+  ctx.fillStyle = "#fff4dc";
+  ctx.fillRect(x + 15, y + 1, 1, 1);
+  ctx.fillRect(x + 16, y + 2, 1, 1);
+  ctx.fillRect(x + 15, y + 6, 1, 1);
+  ctx.fillRect(x + 16, y + 5, 1, 1);
+  // Quad exhaust hexagon at rear
+  ctx.fillStyle = "#1a1a1a";
+  ctx.fillRect(x + 1, y + 3, 1, 2);
+}
 
-  // hit rect (slightly padded)
-  hitsRef.current.push({ x: x - 1, y: carY - 1, w: 20, h: 12, video });
+function drawPorsche(ctx: CanvasRenderingContext2D, x: number, y: number, k: CarKind) {
+  carBase(ctx, x, y, k);
+  // Round off corners (Porsche 911 silhouette is famously rounded)
+  ctx.fillStyle = PAL.asphalt;
+  ctx.fillRect(x, y, 1, 1);
+  ctx.fillRect(x, y + 7, 1, 1);
+  ctx.fillRect(x + k.width - 1, y, 1, 1);
+  ctx.fillRect(x + k.width - 1, y + 7, 1, 1);
+  // Long sloping rear engine cover (rear-engine flat-six)
+  ctx.fillStyle = k.dark;
+  ctx.fillRect(x + 1, y + 2, 4, 4);
+  // Centered cockpit/roof — classic teardrop
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + 6, y + 1, 7, 6);
+  ctx.fillStyle = k.dark;
+  ctx.fillRect(x + 7, y + 2, 5, 4);
+  // Round headlights — Porsche's signature paired ovals
+  ctx.fillStyle = "#fff4dc";
+  ctx.fillRect(x + 16, y + 1, 1, 2);
+  ctx.fillRect(x + 16, y + 5, 1, 2);
+  // Front splitter
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + 17, y + 3, 1, 2);
+}
+
+function drawPagani(ctx: CanvasRenderingContext2D, x: number, y: number, k: CarKind) {
+  carBase(ctx, x, y, k);
+  // Sweeping cockpit canopy (centered)
+  ctx.fillStyle = lighten(k.primary, 12);
+  ctx.fillRect(x + 5, y + 1, 8, 6);
+  ctx.fillStyle = k.dark;
+  ctx.fillRect(x + 6, y + 2, 6, 4);
+  // Gold pinstripe down the spine
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + 1, y + 3, k.width - 2, 1);
+  // Side exhaust ports — quad center cluster at rear (gold = signature)
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x, y + 2, 1, 1);
+  ctx.fillRect(x, y + 5, 1, 1);
+  ctx.fillStyle = "#fde29a";
+  ctx.fillRect(x + 1, y + 4, 1, 1);
+  // Windshield tint
+  ctx.fillStyle = "#5d7a85";
+  ctx.fillRect(x + 11, y + 3, 1, 2);
+  // Headlights — wide eyebrow LED strip
+  ctx.fillStyle = "#fff4dc";
+  ctx.fillRect(x + 16, y + 1, 1, 1);
+  ctx.fillRect(x + 17, y + 2, 1, 1);
+  ctx.fillRect(x + 16, y + 6, 1, 1);
+  ctx.fillRect(x + 17, y + 5, 1, 1);
+}
+
+function drawMcLaren(ctx: CanvasRenderingContext2D, x: number, y: number, k: CarKind) {
+  carBase(ctx, x, y, k);
+  // Low canopy, pulled back (driver sits very low, mid-engine)
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + 4, y + 2, 6, 4);
+  ctx.fillStyle = "#202020";
+  ctx.fillRect(x + 5, y + 3, 4, 2);
+  // Aero air-channel cutouts on the flanks (signature 720S body openings)
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + 11, y, 3, 1);
+  ctx.fillRect(x + 11, y + 7, 3, 1);
+  // Teardrop headlight
+  ctx.fillStyle = "#fff4dc";
+  ctx.fillRect(x + 16, y + 1, 2, 1);
+  ctx.fillRect(x + 16, y + 6, 2, 1);
+  // Rear diffuser / dual-exit exhaust
+  ctx.fillStyle = "#1a1a1a";
+  ctx.fillRect(x, y + 3, 2, 2);
+  // Roof scoop / snorkel
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + 6, y + 4, 1, 1);
+}
+
+function drawBugatti(ctx: CanvasRenderingContext2D, x: number, y: number, k: CarKind) {
+  // Bugatti is wider — 20 wide
+  carBase(ctx, x, y, k);
+  // Two-tone — top half gets the accent (almost black) running the length
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + 1, y + 1, k.width - 2, 2);
+  // Centered horseshoe grille (Bugatti's signature) — round-ish at front
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + k.width - 2, y + 3, 1, 2);
+  ctx.fillStyle = "#c5a455";
+  ctx.fillRect(x + k.width - 1, y + 3, 1, 2);
+  // Cockpit (paired bubble canopy)
+  ctx.fillStyle = "#0a1024";
+  ctx.fillRect(x + 6, y + 2, 7, 4);
+  ctx.fillStyle = "#3b5a96";
+  ctx.fillRect(x + 7, y + 3, 5, 2);
+  // C-shaped side line (signature Chiron sweep)
+  ctx.fillStyle = "#c5a455";
+  ctx.fillRect(x + 6, y + 1, 4, 1);
+  ctx.fillRect(x + 6, y + 6, 4, 1);
+  // Quad LED headlights
+  ctx.fillStyle = "#fff4dc";
+  ctx.fillRect(x + k.width - 1, y + 1, 1, 1);
+  ctx.fillRect(x + k.width - 1, y + 6, 1, 1);
+}
+
+function drawKoenigsegg(ctx: CanvasRenderingContext2D, x: number, y: number, k: CarKind) {
+  carBase(ctx, x, y, k);
+  // Twin gold racing stripes down the length
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x, y + 2, k.width, 1);
+  ctx.fillRect(x, y + 5, k.width, 1);
+  // Cockpit (centered, narrow — dihedral synchro-helix vibes)
+  ctx.fillStyle = "#1a1a1a";
+  ctx.fillRect(x + 5, y + 1, 8, 6);
+  ctx.fillStyle = "#3a3a3a";
+  ctx.fillRect(x + 6, y + 2, 6, 4);
+  // Tall rear wing — extends past the body silhouette
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x, y - 1, 4, 1);
+  ctx.fillRect(x, y + 8, 4, 1);
+  // Narrow nose (bumper notch)
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + k.width - 1, y + 3, 1, 2);
+  // Headlights
+  ctx.fillStyle = "#fff4dc";
+  ctx.fillRect(x + k.width - 2, y + 1, 1, 1);
+  ctx.fillRect(x + k.width - 2, y + 6, 1, 1);
+}
+
+function drawAston(ctx: CanvasRenderingContext2D, x: number, y: number, k: CarKind) {
+  carBase(ctx, x, y, k);
+  // Pointed nose (Valkyrie's needle front)
+  ctx.fillStyle = PAL.asphalt;
+  ctx.fillRect(x + k.width - 1, y, 1, 2);
+  ctx.fillRect(x + k.width - 1, y + 6, 1, 2);
+  // Gold pinstripe down the center spine
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + 1, y + 3, k.width - 2, 1);
+  ctx.fillRect(x + 1, y + 4, k.width - 2, 1);
+  // Cockpit canopy (pulled forward, low)
+  ctx.fillStyle = "#1a2a22";
+  ctx.fillRect(x + 5, y + 1, 7, 6);
+  ctx.fillStyle = "#0e1a14";
+  ctx.fillRect(x + 6, y + 2, 5, 4);
+  // Roof scoop (gold accent)
+  ctx.fillStyle = k.accent;
+  ctx.fillRect(x + 8, y + 3, 1, 2);
+  // Side fender vents — small dark slots
+  ctx.fillStyle = "#0a1a14";
+  ctx.fillRect(x + 11, y, 2, 1);
+  ctx.fillRect(x + 11, y + 7, 2, 1);
+  // Headlights
+  ctx.fillStyle = "#fff4dc";
+  ctx.fillRect(x + k.width - 2, y + 2, 1, 1);
+  ctx.fillRect(x + k.width - 2, y + 5, 1, 1);
 }
 
 function drawFailedCar(
@@ -665,30 +911,58 @@ function drawFailedCar(
   video: PipelineVideo,
   col: number,
   row: number,
-  t: number,
+  _t: number,
   hitsRef: { current: Array<{ x: number; y: number; w: number; h: number; video: PipelineVideo }> },
 ) {
+  // In the junkyard the car is the failed video's normal supercar — but
+  // dented: missing a wheel, slumped to one side, panels rusted toward red.
   const baseX = FAILED_STAGE.x - 18 + col * 12;
   const baseY = 50 + row * 9;
-  // tilted busted body
+  const kind = pickCarKind(video.id);
+
   ctx.fillStyle = PAL.shadow;
   ctx.fillRect(baseX, baseY + 6, 14, 2);
 
-  ctx.fillStyle = FAILED_STAGE.carBody;
+  // shrunken body
+  ctx.fillStyle = mix(kind.primary, "#6c2f2c", 0.55);
   ctx.fillRect(baseX, baseY, 14, 7);
-  ctx.fillStyle = FAILED_STAGE.carShade;
+  ctx.fillStyle = kind.dark;
   ctx.fillRect(baseX, baseY + 5, 14, 2);
-  ctx.fillStyle = "#3a3128";
+  // Smashed cockpit
+  ctx.fillStyle = "#2a201c";
   ctx.fillRect(baseX + 4, baseY + 1, 7, 4);
+  // dent / busted panel
+  ctx.fillStyle = "#1a1310";
+  ctx.fillRect(baseX + 9, baseY + 2, 2, 1);
 
-  // missing wheel (stylized)
-  ctx.fillStyle = "#1f1a16";
+  // 3 wheels — back-right is missing (signature wreck pose)
+  ctx.fillStyle = "#0f0c0a";
   ctx.fillRect(baseX + 2, baseY - 1, 3, 2);
-  // (right rear missing — left out on purpose)
   ctx.fillRect(baseX + 1, baseY + 7, 3, 2);
   ctx.fillRect(baseX + 10, baseY + 7, 3, 2);
+  // small puddle / oil under missing-wheel corner
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.fillRect(baseX + 9, baseY + 8, 4, 1);
 
   hitsRef.current.push({ x: baseX - 1, y: baseY - 1, w: 16, h: 11, video });
+}
+
+/* Tiny color mix helper for the rusted look — ratio 0..1 toward `b` */
+function mix(a: string, b: string, ratio: number): string {
+  const ah = a.replace("#", "");
+  const bh = b.replace("#", "");
+  const ar = parseInt(ah.slice(0, 2), 16);
+  const ag = parseInt(ah.slice(2, 4), 16);
+  const ab = parseInt(ah.slice(4, 6), 16);
+  const br = parseInt(bh.slice(0, 2), 16);
+  const bg = parseInt(bh.slice(2, 4), 16);
+  const bb = parseInt(bh.slice(4, 6), 16);
+  const r = Math.round(ar + (br - ar) * ratio);
+  const g = Math.round(ag + (bg - ag) * ratio);
+  const bl = Math.round(ab + (bb - ab) * ratio);
+  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${bl
+    .toString(16)
+    .padStart(2, "0")}`;
 }
 
 /* ── Title bar ─────────────────────────────────────────────────────────────── */
